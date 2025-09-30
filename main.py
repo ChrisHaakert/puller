@@ -1,128 +1,81 @@
-#!/usr/bin/env python3
-import sys
 import os
 from pathlib import Path
-import argparse
 
-# ----------------------------------------
-# Plattform erkennen & Standardpfade setzen
-# ----------------------------------------
-IS_WINDOWS = sys.platform.startswith("win")
-IS_MAC = sys.platform == "darwin"
+# Pfad zum Android-Projekt
+project_dir = Path("/Users/admin/AndroidStudioProjects/GDocScanner")
+output_file = Path("code.txt")
 
-def default_project_dir() -> Path:
-    if IS_WINDOWS:
-        # Beispiel-Standardpfad unter Windows
-        return Path(r"C:\Android\GDocScanner")
-    elif IS_MAC:
-        # Beispiel-Standardpfad unter macOS
-        return Path.home() / "AndroidStudioProjects" / "MyAndroidProject"
-    else:
-        # Fallback für Linux/andere
-        return Path.cwd()
+# Ordner ausschließen (Build-Artefakte, IDE, VCS)
+EXCLUDE_DIRS = {".git", ".gradle", ".idea", "build", "captures", ".DS_Store"}
 
-# ----------------------------------------
-# Relevanz-Prüfungen
-# ----------------------------------------
-SOURCE_EXTENSIONS = {".kt", ".java"}
-GRADLE_FILES = {
-    "build.gradle",
-    "settings.gradle",
+# Relevante Dateiendungen / -namen
+SOURCE_EXTS = {".kt", ".java", ".kts"}  # inkl. Kotlin-Skripte
+XML_ANYWHERE_IN_RES = True              # alle XMLs unter .../res/**.xml
+MANIFEST_NAME = "AndroidManifest.xml"
+
+# Gradle/Config-Dateien (egal wo sie liegen)
+RELEVANT_FILENAMES = {
+    "build.gradle", "build.gradle.kts",
+    "settings.gradle", "settings.gradle.kts",
     "gradle.properties",
-    "build.gradle.kts",
-    # häufige zusätzliche Gradle-Dateien
-    "settings.gradle.kts",
     "gradle-wrapper.properties",
+    "libs.versions.toml",              # Version Catalog
+    "proguard-rules.pro", "proguard.pro",
+    # optional / falls vorhanden:
+    "google-services.json",
 }
-# Ordner, die typischerweise übersprungen werden sollten
-SKIP_DIRS = {".git", ".gradle", "build", "out", ".idea"}
 
-def is_layout_xml(path: Path) -> bool:
-    """
-    Prüft, ob es sich um eine Layout-XML handelt: */src/*/res/layout/*.xml
-    """
-    # Wir prüfen die Pfadteile robust mit Path.parts
-    parts = [p.lower() for p in path.parts]
-    if "res" in parts and "layout" in parts and path.suffix.lower() == ".xml":
-      # einfache Heuristik: es muss .../res/layout/... enthalten sein
-      # (nicht nur irgendein 'layout' im Namen)
-      try:
-          res_idx = parts.index("res")
-          # danach irgendwo 'layout'
-          return "layout" in parts[res_idx + 1 :]
-      except ValueError:
-          return False
-    return False
+def is_excluded_dir(path: Path) -> bool:
+    parts = set(p.name for p in path.parents) | {path.name}
+    return any(name in EXCLUDE_DIRS for name in parts)
 
-def is_relevant_gradle_file(name: str) -> bool:
-    return name in GRADLE_FILES
+def is_source_file(p: Path) -> bool:
+    return p.suffix in SOURCE_EXTS
 
-def should_skip_dir(dirname: str) -> bool:
-    return dirname in SKIP_DIRS or dirname.startswith(".")
+def is_manifest(p: Path) -> bool:
+    return p.name == MANIFEST_NAME
 
-# ----------------------------------------
-# Dateien sammeln & schreiben
-# ----------------------------------------
-def collect_and_write(project_dir: Path, output_file: Path) -> None:
-    if not project_dir.exists():
-        print(f"Warnung: Projektpfad existiert nicht: {project_dir}", file=sys.stderr)
+def is_res_xml(p: Path) -> bool:
+    if not XML_ANYWHERE_IN_RES:
+        return False
+    parts = [x.lower() for x in p.parts]
+    return "res" in parts and p.suffix == ".xml"
 
-    # Vorherige Datei löschen, falls vorhanden
-    if output_file.exists():
-        try:
-            output_file.unlink()
-        except Exception as e:
-            print(f"Konnte bestehende Ausgabedatei nicht löschen: {e}", file=sys.stderr)
+def is_named_config(p: Path) -> bool:
+    return p.name in RELEVANT_FILENAMES
 
-    with output_file.open("w", encoding="utf-8", errors="replace") as outfile:
-        for root, dirs, files in os.walk(project_dir):
-            # Verzeichnisse filtern (in-place, damit os.walk sie nicht betritt)
-            dirs[:] = [d for d in dirs if not should_skip_dir(d)]
-
-            root_path = Path(root)
-            for fname in files:
-                fpath = root_path / fname
-                ext = fpath.suffix.lower()
-
-                if (
-                    ext in SOURCE_EXTENSIONS
-                    or is_relevant_gradle_file(fname)
-                    or is_layout_xml(fpath)
-                ):
-                    try:
-                        # robustes Lesen; falls UTF-8 nicht reicht, Zeichen ersetzen
-                        with fpath.open("r", encoding="utf-8", errors="replace") as infile:
-                            rel = fpath.as_posix()
-                            outfile.write(f"\n\n===== Datei: {rel} =====\n\n")
-                            outfile.write(infile.read())
-                    except Exception as e:
-                        print(f"Fehler beim Lesen von {fpath}: {e}", file=sys.stderr)
-
-# ----------------------------------------
-# CLI
-# ----------------------------------------
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Sammelt relevante Android-Projektdateien (Kotlin/Java/Gradle/Layout-XML) in eine Textdatei."
+def is_relevant(p: Path) -> bool:
+    # Reihenfolge: schnellste Checks zuerst
+    if p.is_dir():
+        return False
+    if is_excluded_dir(p.parent):
+        return False
+    return (
+        is_source_file(p)
+        or is_manifest(p)
+        or is_res_xml(p)
+        or is_named_config(p)
     )
-    parser.add_argument(
-        "-p", "--project",
-        type=Path,
-        default=default_project_dir(),
-        help="Pfad zum Android-Projekt (Standard abhängig von der Plattform)."
-    )
-    parser.add_argument(
-        "-o", "--output",
-        type=Path,
-        default=Path("code.txt"),
-        help="Ausgabedatei (Standard: code.txt)."
-    )
-    return parser.parse_args()
 
-def main():
-    args = parse_args()
-    collect_and_write(args.project.resolve(), args.output.resolve())
-    print(f"Fertig. Ausgabe: {args.output.resolve()}")
+# Vorherige Datei löschen
+if output_file.exists():
+    output_file.unlink()
 
-if __name__ == "__main__":
-    main()
+count = 0
+with output_file.open("w", encoding="utf-8") as out:
+    for root, dirs, files in os.walk(project_dir):
+        # Ordner-Filter live anwenden (beschleunigt den Walk)
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        for fn in files:
+            p = Path(root) / fn
+            if is_relevant(p):
+                try:
+                    text = p.read_text(encoding="utf-8", errors="strict")
+                except UnicodeDecodeError:
+                    # Falls doch mal eine Binär-/falsch encodierte Datei reinrutscht, überspringen
+                    continue
+                out.write(f"\n\n===== Datei: {p} =====\n\n")
+                out.write(text)
+                count += 1
+
+print(f"Fertig. {count} Dateien nach {output_file} geschrieben.")
