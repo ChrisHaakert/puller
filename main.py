@@ -4,7 +4,7 @@ from pathlib import Path
 
 # Pfad zum Android-Projekt (BITTE HIER WEITERHIN MANUELL ANPASSEN)
 project_dir = Path("/Users/admin/AndroidStudioProjects/GDocScanner")
-project_dir = Path("c:\\android\\SpTest")
+project_dir = Path("c:\\android\\SPTest")
 
 # Ausgabe-Datei (standardmäßig neben dem Script)
 output_file = Path("code.txt")
