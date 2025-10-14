@@ -1,6 +1,8 @@
 import os
 import sys
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 # Pfad zum Android-Projekt (BITTE HIER WEITERHIN MANUELL ANPASSEN)
@@ -66,16 +68,18 @@ def is_vector_drawable_xml(p: Path) -> bool:
         return False
     return VECTOR_ROOT_TAG_RE.search(head) is not None
 
-# --- NEU: Nur strings.xml aus res/values/ zulassen --------------------------
-def is_strings_xml_in_default_values(p: Path) -> bool:
+# --- strings.xml nur aus values & values-night zulassen ---------------------
+ALLOWED_VALUES_DIRS = {"values", "values-night"}
+
+def is_strings_xml_allowed_values(p: Path) -> bool:
     """
-    True nur für .../res/values/strings.xml (ohne Sprach-/Qualifizierer).
-    Alles wie .../res/values-de/strings.xml wird ausgeschlossen.
+    True nur für .../res/values/strings.xml und .../res/values-night/strings.xml.
+    Alles wie .../res/values-de/strings.xml etc. wird ausgeschlossen.
     """
     if p.name.lower() != "strings.xml":
         return False
     parent = p.parent.name.lower()
-    return parent == "values"  # bewusst strikt, keine -de, -rDE, -night etc.
+    return parent in ALLOWED_VALUES_DIRS
 
 def is_named_config(p: Path) -> bool:
     return p.name in RELEVANT_FILENAMES
@@ -93,9 +97,9 @@ def is_relevant(p: Path) -> bool:
         return True
 
     if is_res_xml(p):
-        # Falls es eine strings.xml ist: nur aus res/values/ zulassen
+        # strings.xml: nur aus values/ und values-night/ zulassen
         if p.name.lower() == "strings.xml":
-            return is_strings_xml_in_default_values(p)
+            return is_strings_xml_allowed_values(p)
 
         # Andere XMLs in res/** zulassen – außer Vektorgrafiken
         return not is_vector_drawable_xml(p)
@@ -121,6 +125,54 @@ def safe_read_text(p: Path) -> str | None:
 
 def enable_windows_long_paths():
     pass
+
+# --- NEU: Inhalt von code.txt in die Zwischenablage kopieren ----------------
+def copy_file_to_clipboard(file_path: Path) -> bool:
+    """
+    Kopiert den gesamten Textinhalt von file_path in die Zwischenablage.
+    Nutzt auf Windows UTF-16LE-Bytes, um Codepage-Probleme (✅ etc.) zu vermeiden.
+    """
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="strict")
+    except Exception as e:
+        print(f"Konnte {file_path} nicht lesen für Clipboard: {e}")
+        return False
+
+    try:
+        if os.name == "nt":
+            # Windows: clip erwartet Unicode-Text (UTF-16LE). Kein text=True verwenden!
+            # Außerdem CRLF-Zeilenenden, damit Zeilenumbrüche korrekt übernommen werden.
+            data = text.replace("\n", "\r\n").encode("utf-16le")
+            import subprocess
+            subprocess.run(["clip"], input=data, check=True)  # input=bytes
+            print("Inhalt wurde in die Zwischenablage kopiert (Windows/clip, UTF-16LE).")
+            return True
+        elif sys.platform == "darwin":
+            import subprocess
+            subprocess.run(["pbcopy"], input=text, text=True, check=True)
+            print("Inhalt wurde in die Zwischenablage kopiert (macOS/pbcopy).")
+            return True
+        else:
+            import shutil, subprocess
+            if shutil.which("wl-copy"):
+                subprocess.run(["wl-copy"], input=text, text=True, check=True)
+                print("Inhalt wurde in die Zwischenablage kopiert (wl-copy).")
+                return True
+            if shutil.which("xclip"):
+                proc = subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True)
+                if proc.returncode == 0:
+                    print("Inhalt wurde in die Zwischenablage kopiert (xclip).")
+                    return True
+            if shutil.which("xsel"):
+                proc = subprocess.run(["xsel", "-b", "-i"], input=text, text=True)
+                if proc.returncode == 0:
+                    print("Inhalt wurde in die Zwischenablage kopiert (xsel).")
+                    return True
+            print("Kein Clipboard-Tool gefunden (versucht: wl-copy, xclip, xsel).")
+            return False
+    except Exception as e:
+        print(f"Clipboard-Kopie fehlgeschlagen: {e}")
+        return False
 
 def main():
     if not project_dir.exists():
@@ -161,6 +213,8 @@ def main():
     except OSError as e:
         print(f"Konnte Dateigröße nicht ermitteln: {e}")
 
+    # NEU: Inhalt der code.txt in die Zwischenablage kopieren
+    copy_file_to_clipboard(output_file)
+
 if __name__ == "__main__":
     main()
-
